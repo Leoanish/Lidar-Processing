@@ -1,7 +1,13 @@
 ---
 title: "Lidar Processing"
-format: html
-editor: visual
+author: "Anish Bhattarai"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: cerulean
+    toc: yes
+    toc_float:
+      collapsed: true
 ---
 
 Here in this workflow we will:
@@ -53,10 +59,10 @@ library(geometry)
 # Loading the las file
 
 ```{r}
-jpc_las <- readLAS("../data/all_laz_file/mv_9_160.copc.laz",
+las <- readLAS("../data/clipped_mv_9_160_smallfile.laz",
                    select = "xyzrnc") # here we are reading the laz file and selecting only X,Y,Z coordinates, return number and number of return.
 
-summary(jpc_las@data)
+summary(las@data)
 
 ```
 
@@ -66,11 +72,9 @@ The larger the area bigger is the file size and it will take a lot of processing
 
 ```{r}
 clip <- read_sf("../data/clip_bbox.geojson") %>% 
-  st_transform(crs = st_crs(jpc_las))
+  st_transform(crs = st_crs(las))
 
-jpc_las_c <- clip_roi(jpc_las, clip)
-
-writeLAS(jpc_las_c, "../output/clipped_mv_9_160_smallfile.laz")
+las_c <- clip_roi(las, clip)
 ```
 
 # Classification of the point clouds
@@ -82,7 +86,7 @@ There are other algorithm for the classification like cloth simulation filter(cs
 We can **skip** this classification process because, the classification of point clouds can be performed in DJI terra app, which is faster and produces a RGB cloud point in the app, which can be visually assessed.
 
 ```{r}
-# las <- classify_ground(jpc_las, pmf(ws = 0.1, th = 0.06)) #ws = window size (pixel size in meters), th = hreshold heights above the parameterized ground surface to be considered a ground return.
+# las <- classify_ground(jpc_las, pmf(ws = 0.1, th = 0.06)) #ws = window size (pixel size in meters), th = threshold heights above the parameterized ground surface to be considered a ground return.
 # 
 # las@data
 ```
@@ -92,7 +96,7 @@ We can **skip** this classification process because, the classification of point
 Digital Terrain Models (DTM) sometimes called Digital Elevation Models (DEM) is a topographic model of the bare Earth that can be manipulated by computer. Using triangular irregular network (tin), where it looks into the ground points and creates multiple triangles joining them and what ever falls in the plane of these are used to make a DTM.
 
 ```{r}
-dtm <- rasterize_terrain(jpc_las_c, res = 0.1, algorithm = tin()) # for this to work we must first classify the ground and non-ground points, the better we can quality better DTM we can get
+dtm <- rasterize_terrain(las_c, res = 0.1, algorithm = tin()) # for this to work we must first classify the ground and non-ground points, the better we can quality better DTM we can get
 ```
 
 # Normalization
@@ -102,7 +106,7 @@ As the point clouds are initially measured as mean sea level (MSL) coming out fr
 For normalization there are other algorithm like, knnidw and kriging. But these 2 methods takes a lot of processing time. And based on alot of paper, tin algorithm has a balance between processing time and preciseness, so it is most widely used.
 
 ```{r}
-normalized <- normalize_height(jpc_las_c, algorithm = tin(), dtm = dtm) 
+normalized <- normalize_height(las_c, algorithm = tin(), dtm = dtm) 
 
 normalized@data
 ```
@@ -122,21 +126,21 @@ filt_norm@data %>%
 # Top view (takes time)
 
 ```{r}
-# ggplot()+
-#   geom_point(data = filt_norm@data, aes(x = X, y = Y, color = factor(Classification)), size = 0.1)+
-#   coord_equal()+
-#   scale_color_manual(values = c("forestgreen",
-#                                 "burlywood"))
+ggplot()+
+  geom_point(data = filt_norm@data, aes(x = X, y = Y, color = factor(Classification)), size = 0.1)+
+  coord_equal()+
+  scale_color_manual(values = c("forestgreen",
+                                "burlywood"))
 ```
 
 # Sectional view
 
 ```{r, warning=F, message=F}
-# ggplot()+
-#   geom_point(data = filt_norm@data, aes(x = X, y = Z, color = factor(Classification)), size = 0.01)+
-#   coord_equal(ratio = 10)+ # might need to change this according to the requirement.
-#   scale_color_manual(values = c("forestgreen",
-#                                 "burlywood"))
+ggplot()+
+  geom_point(data = filt_norm@data, aes(x = X, y = Z, color = factor(Classification)), size = 0.01)+
+  coord_equal(ratio = 10)+ # might need to change this according to the requirement.
+  scale_color_manual(values = c("forestgreen",
+                                "burlywood"))
 ```
 
 # Desnity plot
@@ -281,219 +285,3 @@ model_lidar <- lmer(h_mean ~ treatment + (1|blocks), data = both_wo_geom)
 Anova(model_lidar, type = 3)
 ```
 
-```{r}
-# fill.na <- function(x, i=5) { if (is.na(x)[i]) { return(mean(x, na.rm = TRUE)) } else { return(x[i]) }}
-
-w <- matrix(1,3,3)
-
-filled <- terra::focal(chm_rast, w, fun = max, na.rm = T) %>% 
-  st_as_stars()
-
-ggplot()+
-  geom_stars(data = filled)
-```
-
-```{r}
-ht <- filt_norm@data
-
-kmean <- kmeans(ht$Z, nstart = 25, centers = 6)
-
-ht_centers <- cbind(ht, centers = kmean$cluster)
-
-ht_centers_filt <- ht_centers %>% 
-  filter(centers%in%c(2,3,5))
-
-ht_centers_filt %>% 
-  group_by(centers) %>% 
-  summarise(z = mean(Z))
-
-ggplot()+
-  geom_point(data = ht_centers_filt, aes(x = X, y = Y, color = factor(centers)), size = 0.02)
-```
-
-```{r}
-rast_ht <- ht_centers_filt %>% 
-  st_as_sf(coords = c(x = "X",
-                      y = "Y")) %>% 
-  st_set_crs(value = st_crs(filt_norm)) 
-
-rast_ht2 <- rast_ht %>% 
-  st_rasterize(dx = 0.1, dy = 0.1) %>% 
-  as("SpatRaster")
-
-# fill.na <- function(x, i=5) { if (is.na(x)[i]) { return(mean(x, na.rm = TRUE)) } else { return(x[i]) }}
-
-w <- matrix(1,5,5)
-
-filled <- terra::focal(rast_ht2, w, fun = max, na.rm = T) %>% 
-  st_as_stars()
-
-ggplot()+
-  geom_stars(data = filled, aes(fill = Z))
-```
-
-```{r, warning=F, message=F}
-las_csf <- classify_ground(jpc_las, algorithm = csf(sloop_smooth = F, class_threshold = 0.06, cloth_resolution = 0.1))
-
-ggplot(data = las@data, aes(x = X, y = Y, color = as.factor(Classification)))+
-  geom_point(size = 0.1)+
-  scale_color_manual(values = c("forestgreen",
-                                "burlywood"))
-
-```
-
-```{r}
-grid_r <- rast_ht %>% 
-  st_make_grid(cellsize = 0.2) %>% 
-  st_as_sf() %>% 
-  st_set_crs(value = st_crs(filt)) %>% 
-  st_rasterize(dx = 0.01, dy = 0.01)
-
-ggplot()+
-  geom_stars(data = rast_ht)
-  
-```
-
-```{r}
-mean_kmeans <- st_intersection(plots_mv, st_as_sf(filled)) %>% 
-  arrange(plots) 
-
-mean <- mean %>% 
-  mutate(type = case_when(
-    Z >= 0.2 ~ "flag",
-    Z < 0.2 ~ "plant"
-  ))
-
-ggplot()+
-  geom_sf(data = mean_kmeans, aes(color = Z), size = 0.1)
-
-lidar_calc <- mean_kmeans %>% 
-  group_by(plots) %>% 
-  summarise(h_mean = mean(Z)*100,
-            h_max = max(Z)*100,
-            h_min = min(Z)*100,
-            h_med = median(Z)*100) %>% 
-  mutate(plots = as.integer(plots))
-```
-
-```{r}
-ggplot()+
-  geom_point(data = filt@data, aes(x = X, y = Y, color = factor(Classification)), size = 0.01)+
-  coord_equal()
-```
-
-```{r}
-# fill.na <- function(x, i=5) { if (is.na(x)[i]) { return(mean(x, na.rm = TRUE)) } else { return(x[i]) }}
-# w <- matrix(1, 3, 3)
-
-dsm <- rasterize_canopy(filt, res = 0.1, algorithm = p2r(subcircle = 0.1))
-
-# filled <- terra::focal(dsm, w, fun = fill.na)
-
-stars_dsm <- dsm %>% 
-  st_as_stars() 
-
-ggplot()+
-  geom_stars(data = stars_dsm)
-```
-
-```{r}
-plots_mv <- read_sf("../data/MV plots 2nd.geojson") %>% 
-  arrange(plots) %>% 
-  st_transform(crs = st_crs(filled))
-
-ggplot()+
-  geom_sf(data = plots_mv)
-```
-
-```{r}
-mean <- st_intersection(plots_mv, st_as_sf(stars_dsm)) %>% 
-  arrange(plots) %>% 
-  filter(Z > 0.06)
-
-mean <- mean %>% 
-  mutate(type = case_when(
-    Z >= 0.2 ~ "flag",
-    Z < 0.2 ~ "plant"
-  ))
-
-ggplot()+
-  geom_sf(data = mean, aes(color = type))
-
-lidar_calc <- mean %>% 
-  group_by(plots) %>% 
-  summarise(h_mean = mean(Z)*100,
-            h_max = max(Z)*100,
-            h_min = min(Z)*100,
-            h_med = median(Z)*100) %>% 
-  mutate(plots = as.integer(plots))
-```
-
-```{r}
-manual <- readxl::read_xlsx("../data/hand collected data/hand data mv jun 21.xlsx") %>% 
-  janitor::clean_names() %>% 
-  dplyr::select(-sample, -date)
-
-manual_w <- manual %>% 
-  rename(plots = plot) %>% 
-  group_by(plots) %>% 
-  summarise(ht_mean_man = mean(height_cm),
-            ht_max_man = max(height_cm),
-            ht_med_man = median(height_cm))
-
-both <- left_join(lidar_calc, manual_w, by = "plots") %>% 
-  mutate(h_mean = ceiling(h_mean),
-         ht_mean_man = floor(ht_mean_man))
-```
-
-```{r}
-info_mv <- read_csv("../data/info_midville.csv") %>% 
-  dplyr::select(plots = plot_ids, blocks, treatment)
-```
-
-```{r}
-manual_info <- manual %>% 
-  left_join(info_mv, by = c("plot" = "plots"))
-
-both_wo_geom <- both %>% 
-  st_drop_geometry() %>% 
-  left_join(info_mv, by = "plots")
-```
-
-```{r}
-model_man <- lmer(height_cm ~ treatment + (1|blocks/plot), data = manual_info)
-
-Anova(model_man, type = 3)
-```
-
-```{r}
-model_lidar <- lmer(h_mean ~ treatment + (1|blocks), data = both_wo_geom)
-
-Anova(model_lidar, type = 3)
-```
-
-```{r}
-both %>% 
-  ggplot(aes(x = ht_mean_man, y = h_mean))+
-  geom_point()+
-  stat_poly_line()+
-  stat_poly_eq()+
-  geom_abline(slope = 1, linetype = "dashed", color = "red")
-```
-
-```{r}
-location <- locate_trees(filt, lmf(ws = 0.25, hmin = 0.06))
-
-location110 <- location %>% 
-  filter(treeID == 200)
-```
-
-```{r}
-plot(location)
-```
-
-```{r}
-ggplot()+
-  geom_point(data = filt@data, aes(x = X, y = Y, color = factor(Classification)), size = 0.01)+
-  geom_sf(data = location, shape = 21, fill = NA)
-```

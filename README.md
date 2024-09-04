@@ -1,3 +1,15 @@
+---
+title: "Lidar Processing"
+author: "Anish Bhattarai"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: cerulean
+    toc: yes
+    toc_float:
+      collapsed: true
+---
+
 # Lidar-Processing
 
 Here in this workflow we will:
