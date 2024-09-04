@@ -73,7 +73,6 @@ jpc_las_c <- clip_roi(jpc_las, clip)
 writeLAS(jpc_las_c, "../output/clipped_mv_9_160_smallfile.laz")
 ```
 
-
 # Classification of the point clouds
 
 The algorithm that is used is the progressive morphological filter (pmf). It has 2 arguments, window size (which is in meters), which looks at the cloud points within those window size and threshold (th), which looks into the verticle distance and classify them as ground (also in meters).
@@ -249,7 +248,9 @@ both %>%
 ```
 
 # Anova
+
 ## Importing info file
+
 ```{r}
 info_mv <- read_csv("../data/info_midville.csv") %>% 
   dplyr::select(plots = plot_ids, blocks, treatment)
@@ -279,8 +280,6 @@ model_lidar <- lmer(h_mean ~ treatment + (1|blocks), data = both_wo_geom)
 
 Anova(model_lidar, type = 3)
 ```
-
-
 
 ```{r}
 # fill.na <- function(x, i=5) { if (is.na(x)[i]) { return(mean(x, na.rm = TRUE)) } else { return(x[i]) }}
