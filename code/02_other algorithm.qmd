@@ -1,0 +1,244 @@
+---
+title: "Other algorithm trial"
+format: html
+editor: visual
+---
+
+Here in this workflow we will:
+
+1.  Read and write .las and .laz files and render customized point-cloud display
+
+2.  Process point clouds including point classification into ground and non-ground points,
+
+3.  Develop a digital terrain models (DTM),
+
+4.  normalization of cloud points based on DTM
+
+5.  Develop a digital surface models (DSM)
+
+6.  Rasterize the point clouds
+
+7.  Get the canopy height of the plot level (h_max (100 percentile), h_mean, h_min and h_median and percentiles (80, 85, 90, 95).
+
+8.  Do a ANOVA and correlate with the hand collected data (ground truth)
+
+# Installing lidR packages
+
+```{r}
+# install.packages("lidR")
+```
+
+# Loading all required libraries
+
+```{r}
+library(lidR) # package to import and wrangle lidar file (laz or las)
+library(dplyr) # for wrangling the normal dataframes
+library(tidyverse) # for wrangling and filtering
+library(ggplot2) # for data visualization
+library(sf) # to manipulate the simple feature geometry objects
+library(stars) # to manipulate the raster objects
+library(raster) # to manipulate raster object
+library(terra) 
+library(janitor)
+library(ggpmisc) # to plot and get statistical parameters in the plot
+library(ggthemes) # to change the themes
+library(car) # to perform ANOVA
+library(lme4) # to perform linear mixed effect models
+library(emmeans) # to perform the emmeans after running the model
+library(multcomp) # to perform pairwise comparision
+library(multcompView)
+library(geometry)
+```
+
+# Loading the las file
+
+```{r}
+jpc_las <- readLAS("../data/mv_07_11/lidars/terra_las/cloud5dda983007d2fce8.las",
+                   select = "xyzrnc") # here we are reading the laz file and selecting only X,Y,Z coordinates, return number and number of return.
+
+summary(jpc_las@data)
+
+```
+
+# Classification of the point clouds (this step is optional)
+
+The cloud points can be classified in the DJI terra software. Incase the classification isnot done well then we can proceed with the process below. The lidar we are using is the DJI Zenmuse L2.
+
+The algorithm that is used is the progressive morphological filter (pmf). It has 2 arguments, window size (which is in meters), which looks at the cloud points within those window size and threshold (th), which looks into the verticle distance and classify them as ground (also in meters).
+
+```{r}
+# las <- classify_ground(jpc_las, csf(class_threshold = 0.06, cloth_resolution = 0.1)) #ws = window size (pixel size in meters), th = hreshold heights above the parameterized ground surface to be considered a ground return.
+# 
+# las@data
+```
+
+# DTM from the ground points
+
+Digital Terrain Models (DTM) sometimes called Digital Elevation Models (DEM) is a topographic model of the bare Earth that can be manipulated by computer. Using triangular irregular network (tin), where it looks into the ground points and creates multiple triangles joining them and what ever falls in the plane of these are used to make a DTM.
+
+```{r}
+dtm <- rasterize_terrain(jpc_las, res = 0.1, algorithm = knnidw()) # for this to work we must first classify the ground and non-ground points, the better we can quality better DTM we can get
+```
+
+# Normalization
+
+As the point clouds are initially measured as mean sea level (MSL) coming out from the drone, we have to normalize such that we make the ground points as 0 and the point clouds above them are now turned into above ground level (AGL). As we already created the dtm we can now use that dtm as reference to normalize the height where the dtm values are now 0, as it is the ground surface. This normalization now gives us the a digital surface model (DSM), which means, if there is a bare ground it represents the ground, but incase there is a tree,crops, buildings etc. above it represents the height of those structure.
+
+```{r}
+normalized <- normalize_height(jpc_las, algorithm = knnidw(), dtm = dtm) 
+
+normalized@data
+```
+
+# Filtering the point clouds
+
+While DTM is created using TIN there might be some points that falls below the triangular structure created, so we want to make sure we get rid of those noise and we also want to make sure to get rid of any higher structures that does not represents our interest.
+
+```{r}
+filt_norm <- filter_poi(normalized, Z > 0, Z < 1) # upper threshold should be changed according to height of the plant as it changes with the progression of growing season
+
+filt_norm@data %>% 
+  group_by(Classification) %>% 
+  summarise(avg_z = mean(Z))
+```
+
+# Top view
+
+```{r}
+ggplot()+
+  geom_point(data = filt_norm@data, aes(x = X, y = Y, color = factor(Classification)), size = 0.1)+
+  coord_equal()+
+  scale_color_manual(values = c("forestgreen",
+                                "burlywood"))
+```
+
+# Sectional view
+
+```{r, warning=F, message=F}
+ggplot()+
+  geom_point(data = filt_norm@data, aes(x = X, y = Z, color = factor(Classification)), size = 0.01)+
+  coord_equal(ratio = 2)+ # might need to change this according to the requirement.
+  scale_color_manual(values = c("forestgreen",
+                                "burlywood"))
+```
+
+```{r}
+ggplot()+
+  geom_density(data = filt_norm@data, aes(x = Z))+
+  scale_x_continuous(limits = c(0, 1), 
+                     breaks = seq(0,3, 0.1))
+```
+
+# CHM
+
+Getting only the cloud points that are plants so we can rasterize the canopy height.Once the surface heights are removed we get the canopy height measurement.
+
+```{r}
+chm <- filter_poi(filt_norm, Classification == 1, Z > 0.06) # changes can be made for the z height according to the requirement. I put 0.06 here as I am removing the height below 6cm as because it can be soil bumps or small weeds.
+
+chm
+```
+
+```{r}
+location <- locate_trees(chm, lmf(ws = 0.25, hmin = 0.06))
+```
+
+```{r}
+ggplot()+
+  geom_density(data = chm@data, aes(x = Z))+
+  scale_x_continuous(limits = c(0, 1.5), 
+                     breaks = seq(0,3, 0.1))
+```
+
+# Canopy Rasterization
+
+Point to raster (p2r) method is most commonly used for the canopy rasterization. p2r algorithms are conceptually simple, consisting of establishing a grid at a user defined resolution and attributing the elevation of the highest point to each pixel.
+
+```{r}
+chm_rast <- rasterize_canopy(chm, res = 0.1, algorithm = p2r(subcircle = 0.01))
+
+chm_stars <- chm_rast %>% 
+  st_as_stars()
+```
+
+```{r}
+ggplot()+
+  geom_stars(data = chm_stars, aes(fill = Z))
+
+write_stars(chm_stars, "../output/chm_07_11_test.tif")
+```
+
+# Plot file
+
+```{r}
+plots_mv <- read_sf("../data/mv_07_17/07_17_georef_ten_plants_mv.geojson") %>% 
+  rename(plots = plot) %>% 
+  arrange(plots) %>% 
+  st_transform(crs = st_crs(chm_stars)) 
+```
+
+# Intersection
+
+```{r}
+plot_df <- st_intersection(plots_mv, st_as_sf(chm_stars)) %>% 
+  arrange(plots) %>% 
+  mutate(area = as.numeric(st_area(geometry))) 
+```
+
+# Height parameters lidar
+
+```{r}
+lidar_calc <- plot_df %>% 
+  group_by(plots) %>% 
+  summarise(h_mean = mean(Z)*100,
+            h_max = max(Z)*100,
+            h_min = min(Z)*100,
+            h_med = median(Z)*100) %>% 
+  mutate(plots = as.integer(plots))
+```
+
+# height parameters hand
+
+```{r}
+manual <- readxl::read_xlsx("../data/hand collected data/data/4_hand data mv jul 31.xlsx") %>% 
+  janitor::clean_names() %>% 
+  dplyr::select(-sample, -date) %>% 
+  group_by(plot) %>% 
+  mutate(treeID = row_number())
+
+manual_w <- manual %>% 
+  rename(plots = plot) %>% 
+  group_by(plots) %>% 
+  summarise(ht_mean_man = mean(height_cm),
+            ht_max_man = max(height_cm),
+            ht_med_man = median(height_cm))
+```
+
+# lidar and hand merged df
+
+```{r}
+both <- left_join(lidar_calc, manual_w, by = "plots") %>% 
+  mutate(h_mean = ceiling(h_mean),
+         ht_mean_man = floor(ht_mean_man),
+         h_max = ceiling(h_max))
+```
+
+```{r}
+info_mv <- read_csv("../data/info_midville.csv") %>% 
+  rename(plots = plot_ids)
+```
+
+```{r}
+both_info <- left_join(both, info_mv)
+```
+
+# regression
+
+```{r}
+both_info %>% 
+  ggplot(aes(x = h_max, y = ht_mean_man))+
+  geom_point(aes(color = treatment), position = position_dodge(0.5))+
+  stat_poly_line()+
+  stat_poly_eq()+
+  geom_abline(slope = 1, linetype = "dashed", color = "red")
+```

@@ -1,0 +1,224 @@
+---
+title: "kmeans csf"
+format: html
+editor: visual
+---
+
+---
+title: "kmeans algorithm"
+format: html
+editor: visual
+---
+
+Here in this workflow we will:
+
+1.  Read and write .las and .laz files and render customized point-cloud display
+
+2.  Process point clouds including point classification into ground and non-ground points,
+
+3.  Develop a digital terrain models (DTM),
+
+4.  normalization of cloud points based on DTM
+
+5.  Develop a digital surface models (DSM)
+
+6.  Rasterize the point clouds
+
+7.  Get the canopy height of the plot level (h_max (100 percentile), h_mean, h_min and h_median and percentiles (80, 85, 90, 95).
+
+8.  Do a ANOVA and correlate with the hand collected data (ground truth)
+
+# Installing lidR packages
+
+```{r}
+# install.packages("lidR")
+```
+
+# Loading all required libraries
+
+```{r}
+library(lidR) # package to import and wrangle lidar file (laz or las)
+library(dplyr) # for wrangling the normal dataframes
+library(tidyverse) # for wrangling and filtering
+library(ggplot2) # for data visualization
+library(sf) # to manipulate the simple feature geometry objects
+library(stars) # to manipulate the raster objects
+library(raster) # to manipulate raster object
+library(terra) 
+library(janitor)
+library(ggpmisc) # to plot and get statistical parameters in the plot
+library(ggthemes) # to change the themes
+library(car) # to perform ANOVA
+library(lme4) # to perform linear mixed effect models
+library(emmeans) # to perform the emmeans after running the model
+library(multcomp) # to perform pairwise comparision
+library(multcompView)
+library(geometry)
+```
+
+# Loading the las file
+
+```{r}
+jpc_las <- readLAS("../data/MV_07_31/lidars/terra_las/cloud3ba7e0d2fc56c540.copc.laz",
+                   select = "xyzrn") # here we are reading the laz file and selecting only X,Y,Z coordinates, return number and number of return.
+
+summary(jpc_las@data)
+
+```
+
+# Classification of the point clouds
+
+The algorithm that is used is the progressive morphological filter (pmf). It has 2 arguments, window size (which is in meters), which looks at the cloud points within those window size and threshold (th), which looks into the verticle distance and classify them as ground (also in meters).
+
+```{r}
+las <- classify_ground(jpc_las,csf(class_threshold = 0.06, cloth_resolution = 0.1)) #ws = window size (pixel size in meters), th = hreshold heights above the parameterized ground surface to be considered a ground return.
+
+las@data
+```
+
+# DTM from the ground points
+
+Digital Terrain Models (DTM) sometimes called Digital Elevation Models (DEM) is a topographic model of the bare Earth that can be manipulated by computer. Using triangular irregular network (tin), where it looks into the ground points and creates multiple triangles joining them and what ever falls in the plane of these are used to make a DTM.
+
+```{r}
+dtm <- rasterize_terrain(las, res = 0.1, algorithm = tin()) # for this to work we must first classify the ground and non-ground points, the better we can quality better DTM we can get
+```
+
+# Normalization
+
+As the point clouds are initially measured as mean sea level (MSL) coming out from the drone, we have to normalize such that we make the ground points as 0 and the point clouds above them are now turned into above ground level (AGL). As we already created the dtm we can now use that dtm as reference to normalize the height where the dtm values are now 0, as it is the ground surface. This normalization now gives us the a digital surface model (DSM), which means, if there is a bare ground it represents the ground, but incase there is a tree,crops, buildings etc. above it represents the height of those structure.
+
+```{r}
+normalized <- normalize_height(las, algorithm = tin(), dtm = dtm) 
+
+normalized@data
+```
+
+# Filtering the point clouds
+
+While DTM is created using TIN there might be some points that falls below the triangular structure created, so we want to make sure we get rid of those noise and we also want to make sure to get rid of any higher structures that does not represents our interest.
+
+```{r}
+filt_norm <- filter_poi(normalized, Z > 0, Z < 1.5) # 
+
+filt_norm@data %>% 
+  group_by(Classification) %>% 
+  summarise(avg_z = mean(Z))
+```
+
+
+```{r}
+ht <- filt_norm@data
+
+kmean <- kmeans(ht$Z, nstart = 25, centers = 6)
+
+ht_centers <- cbind(ht, centers = kmean$cluster)
+
+ht_centers_filt <- ht_centers %>% 
+  filter(centers%in%c(1,2,4))
+
+ht_centers %>% 
+  group_by(centers) %>% 
+  summarise(z = mean(Z))
+
+ggplot()+
+  geom_point(data = ht_centers_filt, aes(x = X, y = Y, color = factor(centers)), size = 0.02)
+```
+
+```{r}
+rast_ht <- ht_centers_filt %>% 
+  st_as_sf(coords = c(x = "X",
+                      y = "Y")) %>% 
+  st_set_crs(value = st_crs(filt_norm)) 
+
+rast_ht2 <- rast_ht %>% 
+  st_rasterize(dx = 0.1, dy = 0.1) %>% 
+  as("SpatRaster")
+ 
+w <- matrix(1,3,3)
+
+filled <- terra::focal(rast_ht2, w, fun = max, na.rm = T) %>% 
+  st_as_stars()
+
+ggplot()+
+  geom_stars(data = filled, aes(fill = Z))
+```
+
+# Plot file
+
+```{r}
+plots_mv <- read_sf("../data/MV_07_31/07_31_mv_ten_plants.geojson") %>% 
+  rename(plots = plot) %>% 
+  arrange(plots) %>% 
+  st_transform(crs = st_crs(filled))
+```
+
+```{r}
+mean_kmeans <- st_intersection(plots_mv, st_as_sf(filled)) %>% 
+  arrange(plots) 
+
+ggplot()+
+  geom_sf(data = mean_kmeans, aes(color = Z), size = 0.1)
+
+lidar_calc <- mean_kmeans %>% 
+  group_by(plots) %>% 
+  summarise(h_mean = mean(Z)*100,
+            h_max = max(Z)*100,
+            h_min = min(Z)*100,
+            h_med = median(Z)*100) %>% 
+  mutate(plots = as.integer(plots))
+```
+
+```{r}
+manual <- readxl::read_xlsx("../data/hand collected data/data/4_hand data mv jul 31.xlsx") %>% 
+  janitor::clean_names() %>% 
+  dplyr::select(-sample, -date)
+
+manual_w <- manual %>% 
+  rename(plots = plot) %>% 
+  group_by(plots) %>% 
+  summarise(ht_mean_man = mean(height_cm),
+            ht_max_man = max(height_cm),
+            ht_med_man = median(height_cm))
+
+both <- left_join(lidar_calc, manual_w, by = "plots") %>% 
+  mutate(h_mean = ceiling(h_mean),
+         ht_mean_man = floor(ht_mean_man))
+```
+
+# regression
+
+```{r}
+both %>% 
+  ggplot(aes(x = ht_max_man, y = h_max))+
+  geom_point()+
+  stat_poly_line()+
+  stat_poly_eq()+
+  geom_abline(slope = 1, linetype = "dashed", color = "red")
+```
+
+```{r}
+info_mv <- read_csv("../data/info_midville.csv") %>% 
+  dplyr::select(plots = plot_ids, blocks, treatment)
+```
+
+```{r}
+manual_info <- manual %>% 
+  left_join(info_mv, by = c("plot" = "plots"))
+
+both_wo_geom <- both %>% 
+  st_drop_geometry() %>% 
+  left_join(info_mv, by = "plots")
+```
+
+```{r}
+model_man <- lmer(height_cm ~ treatment + (1|blocks/plot), data = manual_info)
+
+Anova(model_man, type = 3)
+```
+
+```{r}
+model_lidar <- lmer(h_mean ~ treatment + (1|blocks), data = both_wo_geom)
+
+Anova(model_lidar, type = 3)
+```
