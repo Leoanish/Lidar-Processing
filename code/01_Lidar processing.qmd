@@ -245,6 +245,8 @@ summary(lm(ht_mean_man ~ h_mean, data = both))
 # regression
 
 ```{r}
+Sys.Date()
+
 both %>% 
   ggplot(aes(x = ht_mean_man, y = h_mean))+
   geom_point()+

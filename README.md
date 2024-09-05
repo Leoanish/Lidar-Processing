@@ -1,21 +1,21 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/GiorgosXou/Random-stuff/main/Programming/StackOverflow/Answers/70200610_11465149/w.png">
-  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/GiorgosXou/Random-stuff/main/Programming/StackOverflow/Answers/70200610_11465149/b.png">
-  <img alt="Shows a black logo in light color mode and a white one in dark color mode." src="https://user-images.githubusercontent.com/25423296/163456779-a8556205-d0a5-45e2-ac17-42d089e3c3f8.png">
-</picture>
+<picture> <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/GiorgosXou/Random-stuff/main/Programming/StackOverflow/Answers/70200610_11465149/w.png"> <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/GiorgosXou/Random-stuff/main/Programming/StackOverflow/Answers/70200610_11465149/b.png"> <img src="https://user-images.githubusercontent.com/25423296/163456779-a8556205-d0a5-45e2-ac17-42d089e3c3f8.png" alt="Shows a black logo in light color mode and a white one in dark color mode."/> </picture>
 
 ---
 title: "Lidar Processing"
-date: 2024/09/04
-output: rmdformats::readthedown
+date: `r Sys.Date()`
+output: html_document
 ---
 
-```{css}
-.badCode {
-background-color: red;
+```{=html}
+<style>
+pre.bluecars {
+    background-color: #aabbff !important;
 }
+pre.redcars {
+    background-color: #ffbbbb !important;
+}
+</style>
 ```
-
 Here in this workflow we will:
 
 1.  Read and write .las and .laz files and render customized point-cloud display
@@ -36,13 +36,13 @@ Here in this workflow we will:
 
 # Installing lidR packages
 
-```{r}
+```{bluecars}
 # install.packages("lidR")
 ```
 
 # Loading all required libraries
 
-```{r}
+```{redcars}
 library(lidR) # package to import and wrangle lidar file (laz or las)
 library(dplyr) # for wrangling the normal dataframes
 library(tidyverse) # for wrangling and filtering
@@ -264,7 +264,6 @@ metrica::scatter_plot(obs = both$ht_mean_man, pred = both$h_mean, print_metrics 
                        labs(title = "9_160")
 ```
 
-
 # Anova
 
 ## Importing info file
@@ -316,4 +315,3 @@ both_sp %>%
   geom_abline(slope = 1, linetype = "dashed", color = "red")+
   coord_obs_pred()
 ```
-
