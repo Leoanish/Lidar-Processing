@@ -3,7 +3,7 @@
 ---
 title: "Lidar Processing"
 date: `r Sys.Date()`
-output: html_document
+output: github_document
 ---
 
 ```{=html}

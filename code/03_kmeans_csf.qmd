@@ -59,10 +59,10 @@ library(geometry)
 # Loading the las file
 
 ```{r}
-jpc_las <- readLAS("../data/MV_07_31/lidars/terra_las/cloud3ba7e0d2fc56c540.copc.laz",
-                   select = "xyzrn") # here we are reading the laz file and selecting only X,Y,Z coordinates, return number and number of return.
+k_las <- readLAS("../data/clipped_mv_9_160_smallfile.laz",
+                   select = "xyzrnc") # here we are reading the laz file and selecting only X,Y,Z coordinates, return number and number of return.
 
-summary(jpc_las@data)
+summary(k_las@data)
 
 ```
 
@@ -70,10 +70,14 @@ summary(jpc_las@data)
 
 The algorithm that is used is the progressive morphological filter (pmf). It has 2 arguments, window size (which is in meters), which looks at the cloud points within those window size and threshold (th), which looks into the verticle distance and classify them as ground (also in meters).
 
-```{r}
-las <- classify_ground(jpc_las,csf(class_threshold = 0.06, cloth_resolution = 0.1)) #ws = window size (pixel size in meters), th = hreshold heights above the parameterized ground surface to be considered a ground return.
+There are other algorithm for the classification like cloth simulation filter(csf), which is most widely used. Pmf is generally used when the vegetation is too dense while csf is used when the vegetation is less dense.
 
-las@data
+We can **skip** this classification process because, the classification of point clouds can be performed in DJI terra app, which is faster and produces a RGB cloud point in the app, which can be visually assessed.
+
+```{r}
+# las <- classify_ground(k_las,csf(class_threshold = 0.06, cloth_resolution = 0.1)) #ws = window size (pixel size in meters), th = hreshold heights above the parameterized ground surface to be considered a ground return.
+# 
+# las@data
 ```
 
 # DTM from the ground points
@@ -81,15 +85,17 @@ las@data
 Digital Terrain Models (DTM) sometimes called Digital Elevation Models (DEM) is a topographic model of the bare Earth that can be manipulated by computer. Using triangular irregular network (tin), where it looks into the ground points and creates multiple triangles joining them and what ever falls in the plane of these are used to make a DTM.
 
 ```{r}
-dtm <- rasterize_terrain(las, res = 0.1, algorithm = tin()) # for this to work we must first classify the ground and non-ground points, the better we can quality better DTM we can get
+dtm <- rasterize_terrain(k_las, res = 0.1, algorithm = tin()) # for this to work we must first classify the ground and non-ground points, the better we can quality better DTM we can get
 ```
 
 # Normalization
 
 As the point clouds are initially measured as mean sea level (MSL) coming out from the drone, we have to normalize such that we make the ground points as 0 and the point clouds above them are now turned into above ground level (AGL). As we already created the dtm we can now use that dtm as reference to normalize the height where the dtm values are now 0, as it is the ground surface. This normalization now gives us the a digital surface model (DSM), which means, if there is a bare ground it represents the ground, but incase there is a tree,crops, buildings etc. above it represents the height of those structure.
 
+For normalization there are other algorithm like, knnidw and kriging. But these 2 methods takes a lot of processing time. And based on alot of paper, tin algorithm has a balance between processing time and preciseness, so it is most widely used.
+
 ```{r}
-normalized <- normalize_height(las, algorithm = tin(), dtm = dtm) 
+normalized <- normalize_height(k_las, algorithm = tin(), dtm = dtm) 
 
 normalized@data
 ```
@@ -106,6 +112,10 @@ filt_norm@data %>%
   summarise(avg_z = mean(Z))
 ```
 
+# Kmean clustering
+
+Clustering the point cloud values to filter out any noises that seems alot higher or lower than the actual plant heights.
+
 ```{r}
 ht <- filt_norm@data
 
@@ -113,16 +123,23 @@ kmean <- kmeans(ht$Z, nstart = 25, centers = 6)
 
 ht_centers <- cbind(ht, centers = kmean$cluster)
 
-ht_centers_filt <- ht_centers %>% 
-  filter(centers%in%c(1,2,4))
-
 ht_centers %>% 
   group_by(centers) %>% 
-  summarise(z = mean(Z))
+  summarise(z = mean(Z)) # Checking the height of each of the clusters and removing the low/high values that is potential noise in our data.
+
+```
+
+# Noise removal
+
+```{r}
+ht_centers_filt <- ht_centers %>% 
+  filter(centers%in%c(2,4,5,6))
 
 ggplot()+
   geom_point(data = ht_centers_filt, aes(x = X, y = Y, color = factor(centers)), size = 0.02)
 ```
+
+# Focal to get the max value
 
 ```{r}
 rast_ht <- ht_centers_filt %>% 
@@ -132,9 +149,9 @@ rast_ht <- ht_centers_filt %>%
 
 rast_ht2 <- rast_ht %>% 
   st_rasterize(dx = 0.1, dy = 0.1) %>% 
-  as("SpatRaster")
+  as("SpatRaster") # Converting into the spatraster object so it works with the teraa::focal function.
  
-w <- matrix(1,3,3)
+w <- matrix(1,5,5) #Creating a matrix size of 3*3. As I am creating a DTM and normalization at 10cm*10cm resolution and rasterizing the only plant cloud points to a resolution of 10*10cm using a focal of 3*3 would give me a coverage of 30cm in each direction and get the maximum value.
 
 filled <- terra::focal(rast_ht2, w, fun = max, na.rm = T) %>% 
   st_as_stars()
@@ -146,7 +163,7 @@ ggplot()+
 # Plot file
 
 ```{r}
-plots_mv <- read_sf("../data/MV_07_31/07_31_mv_ten_plants.geojson") %>% 
+plots_mv <- read_sf("../data/ten_plants_bbox.geojson") %>% 
   rename(plots = plot) %>% 
   arrange(plots) %>% 
   st_transform(crs = st_crs(filled))
@@ -169,7 +186,7 @@ lidar_calc <- mean_kmeans %>%
 ```
 
 ```{r}
-manual <- readxl::read_xlsx("../data/hand collected data/data/4_hand data mv jul 31.xlsx") %>% 
+manual <- readxl::read_xlsx("../data/5_hand data mv aug 26.xlsx") %>% 
   janitor::clean_names() %>% 
   dplyr::select(-sample, -date)
 
@@ -180,16 +197,16 @@ manual_w <- manual %>%
             ht_max_man = max(height_cm),
             ht_med_man = median(height_cm))
 
-both <- left_join(lidar_calc, manual_w, by = "plots") %>% 
-  mutate(h_mean = ceiling(h_mean),
-         ht_mean_man = floor(ht_mean_man))
+both <- left_join(lidar_calc, manual_w, by = "plots") 
+  # mutate(h_mean = ceiling(h_mean),
+  #        ht_mean_man = floor(ht_mean_man))
 ```
 
 # regression
 
 ```{r}
 both %>% 
-  ggplot(aes(x = ht_max_man, y = h_max))+
+  ggplot(aes(x = ht_mean_man, y = h_mean))+
   geom_point()+
   stat_poly_line()+
   stat_poly_eq()+
