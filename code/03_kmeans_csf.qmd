@@ -106,7 +106,6 @@ filt_norm@data %>%
   summarise(avg_z = mean(Z))
 ```
 
-
 ```{r}
 ht <- filt_norm@data
 

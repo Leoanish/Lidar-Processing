@@ -5,12 +5,7 @@ date: "`r Sys.Date()`"
 output: 
   html_document:
     theme: cerulean
-    toc: yes
-    toc_float:
-      collapsed: true
 ---
-
-# Lidar-Processing
 
 Here in this workflow we will:
 
@@ -56,15 +51,16 @@ library(emmeans) # to perform the emmeans after running the model
 library(multcomp) # to perform pairwise comparision
 library(multcompView)
 library(geometry)
+library(tidymodels)
 ```
 
 # Loading the las file
 
 ```{r}
-jpc_las <- readLAS("../data/all_laz_file/mv_9_160.copc.laz",
+las <- readLAS("../data/clipped_mv_9_160_smallfile.laz",
                    select = "xyzrnc") # here we are reading the laz file and selecting only X,Y,Z coordinates, return number and number of return.
 
-summary(jpc_las@data)
+summary(las@data)
 
 ```
 
@@ -74,11 +70,9 @@ The larger the area bigger is the file size and it will take a lot of processing
 
 ```{r}
 clip <- read_sf("../data/clip_bbox.geojson") %>% 
-  st_transform(crs = st_crs(jpc_las))
+  st_transform(crs = st_crs(las))
 
-jpc_las_c <- clip_roi(jpc_las, clip)
-
-writeLAS(jpc_las_c, "../output/clipped_mv_9_160_smallfile.laz")
+las_c <- clip_roi(las, clip)
 ```
 
 # Classification of the point clouds
@@ -90,7 +84,7 @@ There are other algorithm for the classification like cloth simulation filter(cs
 We can **skip** this classification process because, the classification of point clouds can be performed in DJI terra app, which is faster and produces a RGB cloud point in the app, which can be visually assessed.
 
 ```{r}
-# las <- classify_ground(jpc_las, pmf(ws = 0.1, th = 0.06)) #ws = window size (pixel size in meters), th = hreshold heights above the parameterized ground surface to be considered a ground return.
+# las <- classify_ground(jpc_las, pmf(ws = 0.1, th = 0.06)) #ws = window size (pixel size in meters), th = threshold heights above the parameterized ground surface to be considered a ground return.
 # 
 # las@data
 ```
@@ -100,7 +94,7 @@ We can **skip** this classification process because, the classification of point
 Digital Terrain Models (DTM) sometimes called Digital Elevation Models (DEM) is a topographic model of the bare Earth that can be manipulated by computer. Using triangular irregular network (tin), where it looks into the ground points and creates multiple triangles joining them and what ever falls in the plane of these are used to make a DTM.
 
 ```{r}
-dtm <- rasterize_terrain(jpc_las_c, res = 0.1, algorithm = tin()) # for this to work we must first classify the ground and non-ground points, the better we can quality better DTM we can get
+dtm <- rasterize_terrain(las_c, res = 0.1, algorithm = tin()) # for this to work we must first classify the ground and non-ground points, the better we can quality better DTM we can get
 ```
 
 # Normalization
@@ -110,7 +104,7 @@ As the point clouds are initially measured as mean sea level (MSL) coming out fr
 For normalization there are other algorithm like, knnidw and kriging. But these 2 methods takes a lot of processing time. And based on alot of paper, tin algorithm has a balance between processing time and preciseness, so it is most widely used.
 
 ```{r}
-normalized <- normalize_height(jpc_las_c, algorithm = tin(), dtm = dtm) 
+normalized <- normalize_height(las_c, algorithm = tin(), dtm = dtm) 
 
 normalized@data
 ```
@@ -130,21 +124,21 @@ filt_norm@data %>%
 # Top view (takes time)
 
 ```{r}
-# ggplot()+
-#   geom_point(data = filt_norm@data, aes(x = X, y = Y, color = factor(Classification)), size = 0.1)+
-#   coord_equal()+
-#   scale_color_manual(values = c("forestgreen",
-#                                 "burlywood"))
+ggplot()+
+  geom_point(data = filt_norm@data, aes(x = X, y = Y, color = factor(Classification)), size = 0.1)+
+  coord_equal()+
+  scale_color_manual(values = c("forestgreen",
+                                "burlywood"))
 ```
 
 # Sectional view
 
 ```{r, warning=F, message=F}
-# ggplot()+
-#   geom_point(data = filt_norm@data, aes(x = X, y = Z, color = factor(Classification)), size = 0.01)+
-#   coord_equal(ratio = 10)+ # might need to change this according to the requirement.
-#   scale_color_manual(values = c("forestgreen",
-#                                 "burlywood"))
+ggplot()+
+  geom_point(data = filt_norm@data, aes(x = X, y = Z, color = factor(Classification)), size = 0.01)+
+  coord_equal(ratio = 10)+ # might need to change this according to the requirement.
+  scale_color_manual(values = c("forestgreen",
+                                "burlywood"))
 ```
 
 # Desnity plot
@@ -152,8 +146,8 @@ filt_norm@data %>%
 ```{r}
 ggplot()+
   geom_density(data = filt_norm@data, aes(x = Z))+
-  scale_x_continuous(limits = c(0, 1), 
-                     breaks = seq(0,1, 0.1))
+  scale_x_continuous(limits = c(0, 1.5), 
+                     breaks = seq(0,1.5, 0.1))
 ```
 
 # CHM
@@ -161,7 +155,7 @@ ggplot()+
 Getting only the cloud points that are plants so we can rasterize the canopy height.Once the surface heights are removed we get the canopy height measurement.
 
 ```{r}
-chm <- filter_poi(filt_norm, Z > 0.1, Classification == 1) # changes can be made for the z height according to the requirement. I put 0.06 here as I am considering
+chm <- filter_poi(filt_norm, Z > 0.1, Classification == 1) # changes can be made for the z height according to the requirement. I put 0.1 here as I am considering small bumps, weeds and dead plants as noise.
 
 chm
 ```
@@ -169,8 +163,8 @@ chm
 ```{r}
 ggplot()+
   geom_density(data = chm@data, aes(x = Z))+
-  scale_x_continuous(limits = c(0, 2), 
-                     breaks = seq(0,2, 0.1))
+  scale_x_continuous(limits = c(0, 1.5), 
+                     breaks = seq(0,1.5, 0.1))
 ```
 
 # Canopy Rasterization
@@ -178,13 +172,11 @@ ggplot()+
 Point to raster (p2r) method is most commonly used for the canopy rasterization. p2r algorithms are conceptually simple, consisting of establishing a grid at a user defined resolution and attributing the elevation of the highest point to each pixel.
 
 ```{r}
-chm_rast <- rasterize_canopy(chm, res = 0.1, algorithm = p2r(subcircle = 0.1))
+chm_rast <- rasterize_canopy(chm, res = 0.6, algorithm = p2r(subcircle = 0.1))
 
 chm_stars <- chm_rast %>% 
   st_as_stars()
 
-write_stars(chm_stars, "../output/mv_default.tif",
-            delete_dsm = T)
 ```
 
 ```{r}
@@ -204,7 +196,8 @@ plots_mv <- read_sf("../data/ten_plants_bbox.geojson") %>%
 
 ```{r}
 plot_df <- st_intersection(plots_mv, st_as_sf(chm_stars)) %>% 
-  arrange(plot)
+  arrange(plot) %>% 
+  filter(!plot == 307)
 ```
 
 # Height parameters lidar
@@ -218,19 +211,18 @@ lidar_calc <- plot_df %>%
             h_med = median(Z)*100) %>% 
   mutate(plot = as.integer(plot))
 
-write_csv(lidar_calc, "../output/lidar_calc_default.csv")
+write_csv(lidar_calc, "../output/lidar_calc_9_160.csv")
 ```
 
 # height parameters hand
 
 ```{r}
-manual <- readxl::read_xlsx("../data/hand collected data/data/1_hand data mv jun 21.xlsx") %>% 
+manual <- readxl::read_xlsx("../data/5_hand data mv aug 26.xlsx") %>% 
   janitor::clean_names() %>% 
   dplyr::select(-sample, -date)
 
 manual_w <- manual %>% 
-  rename(plots = plot) %>% 
-  group_by(plots) %>% 
+  group_by(plot) %>% 
   summarise(ht_mean_man = mean(height_cm),
             ht_max_man = max(height_cm),
             ht_med_man = median(height_cm))
@@ -239,9 +231,11 @@ manual_w <- manual %>%
 # lidar and hand merged df
 
 ```{r}
-both <- left_join(lidar_calc, manual_w, by = "plots") %>% 
-  mutate(h_mean = ceiling(h_mean),
-         ht_mean_man = floor(ht_mean_man))
+both <- left_join(lidar_calc, manual_w, by = "plot")
+  # mutate(h_mean = ceiling(h_mean),
+  #        ht_mean_man = floor(ht_mean_man))
+
+summary(lm(ht_mean_man ~ h_mean, data = both))
 ```
 
 # regression
@@ -251,40 +245,66 @@ both %>%
   ggplot(aes(x = ht_mean_man, y = h_mean))+
   geom_point()+
   stat_poly_line()+
-  stat_poly_eq()+
-  geom_abline(slope = 1, linetype = "dashed", color = "red")
+  stat_poly_eq(use_label(labels = c("eq", "R2")))+
+  geom_abline(slope = 1, linetype = "dashed", color = "red")+
+  coord_obs_pred()
 ```
+
+```{r}
+metrica::scatter_plot(obs = both$ht_mean_man, pred = both$h_mean, print_metrics = T, metrics_list = c('R2','RMSE', "MAE"), position_eq = c(x = 0.7*90, y = 1.25*86), position_metrics = c(x = 63, y = 1.05*98))+
+                       labs(title = "9_160")
+```
+
 
 # Anova
 
 ## Importing info file
 
 ```{r}
-info_mv <- read_csv("../data/info_midville.csv") %>% 
-  dplyr::select(plots = plot_ids, blocks, treatment)
+chm_stars_sp <- chm_stars %>% 
+  as("SpatRaster")
 ```
 
 ```{r}
-manual_info <- manual %>% 
-  left_join(info_mv, by = c("plot" = "plots"))
+w <- matrix(1,3,3)
 
-both_wo_geom <- both %>% 
-  st_drop_geometry() %>% 
-  left_join(info_mv, by = "plots")
+filled <- terra::focal(chm_stars_sp, w, fun = max, na.rm = T) %>% 
+  st_as_stars()
+
+ggplot()+
+  geom_stars(data = filled, aes(fill = focal_max))
 ```
-
-# Model manual
 
 ```{r}
-model_man <- lmer(height_cm ~ treatment + (1|blocks/plot), data = manual_info)
-
-Anova(model_man, type = 3)
+plot_df_sp <- st_intersection(plots_mv, st_as_sf(filled)) %>% 
+  arrange(plot) %>% 
+  filter(!plot == 307)
 ```
 
-# Model lidar
+# Height parameters lidar
 
 ```{r}
-model_lidar <- lmer(h_mean ~ treatment + (1|blocks), data = both_wo_geom)
+lidar_calc_sp <- plot_df_sp %>% 
+  group_by(plot) %>% 
+  summarise(h_mean = mean(focal_max)*100,
+            h_max = max(focal_max)*100,
+            h_min = min(focal_max)*100,
+            h_med = median(focal_max)*100) %>% 
+  mutate(plot = as.integer(plot))
 
-Anova(model_lidar, type = 3)
 ```
+
+```{r}
+both_sp <- left_join(lidar_calc_sp, manual_w, by = "plot")
+```
+
+```{r}
+both_sp %>% 
+  ggplot(aes(x = ht_mean_man, y = h_mean))+
+  geom_point()+
+  stat_poly_line()+
+  stat_poly_eq(use_label(labels = c("eq", "R2")))+
+  geom_abline(slope = 1, linetype = "dashed", color = "red")+
+  coord_obs_pred()
+```
+
