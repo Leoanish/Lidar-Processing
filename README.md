@@ -5,10 +5,16 @@
 </picture>
 
 ---
-title: "Untitled"
-date: "Last Updated: `r format(Sys.time(), '%d, %B, %Y at %H:%M')`"
+title: "Lidar Processing"
+date: 2024/09/04
 output: rmdformats::readthedown
 ---
+
+```{css}
+.badCode {
+background-color: red;
+}
+```
 
 Here in this workflow we will:
 
