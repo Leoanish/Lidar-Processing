@@ -4,6 +4,12 @@
   <img alt="Shows a black logo in light color mode and a white one in dark color mode." src="https://user-images.githubusercontent.com/25423296/163456779-a8556205-d0a5-45e2-ac17-42d089e3c3f8.png">
 </picture>
 
+---
+title: "Untitled"
+date: "Last Updated: `r format(Sys.time(), '%d, %B, %Y at %H:%M')`"
+output: rmdformats::readthedown
+---
+
 Here in this workflow we will:
 
 1.  Read and write .las and .laz files and render customized point-cloud display

@@ -185,6 +185,7 @@ ggplot()+
 ```
 
 # Plot file
+Getting the bounding box of the ten plants, that were hand measured during the growing season
 
 ```{r}
 plots_mv <- read_sf("../data/ten_plants_bbox.geojson") %>% 
@@ -202,13 +203,16 @@ plot_df <- st_intersection(plots_mv, st_as_sf(chm_stars)) %>%
 
 # Height parameters lidar
 
+Calculating the different height parameters like, mean, max, minimum, median 
+
 ```{r}
 lidar_calc <- plot_df %>% 
   group_by(plot) %>% 
   summarise(h_mean = mean(Z)*100,
             h_max = max(Z)*100,
             h_min = min(Z)*100,
-            h_med = median(Z)*100) %>% 
+            h_med = median(Z)*100, 
+            h_95 = quantile(Z, 0.90)*100) %>% 
   mutate(plot = as.integer(plot))
 
 write_csv(lidar_calc, "../output/lidar_calc_9_160.csv")
